@@ -1,0 +1,355 @@
+const b=document.querySelector('.menu'),l=document.getElementById('links');
+b.addEventListener('click',()=>{const o=l.classList.toggle('open');b.setAttribute('aria-expanded',o)});
+l.addEventListener('click',e=>{if(e.target.tagName==='A'){l.classList.remove('open');b.setAttribute('aria-expanded',false)}});
+
+/* ---------- Mandi finder ---------- */
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const form = $('finder-form'), locInput = $('loc'), cropSel = $('crop'), radiusSel = $('radius');
+  const msg = $('form-msg'), goBtn = $('go'), geoBtn = $('geo-btn'), resultsBox = $('results');
+  if (!form) return;
+
+  const COLORS = ['#168B45', '#D9A52C', '#2B6CB0', '#D9622B', '#7B4BB0', '#1B9AAA'];
+  let mode = 'seller';
+  let coords = null;            // set by "Use my location"
+  let chart = null;
+  let suggestTimer = null;
+  let requestId = 0;
+
+  const inr = (n) => '₹' + Math.round(n).toLocaleString('en-IN');
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function say(text, isError) {
+    msg.textContent = text || '';
+    msg.className = 'form-msg' + (isError ? ' error' : '');
+  }
+  async function getJSON(url) {
+    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    let data = null;
+    try { data = await res.json(); } catch (e) { /* not JSON */ }
+    if (!res.ok) throw new Error((data && data.error) || 'Something went wrong (' + res.status + ').');
+    return data;
+  }
+
+  /* mode toggle (also driven by the BUYER / SELLER buttons in the hero) */
+  function setMode(m) {
+    mode = m === 'buyer' ? 'buyer' : 'seller';
+    document.querySelectorAll('.mode-btn').forEach((b) =>
+      b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
+  }
+  document.querySelectorAll('.mode-btn').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
+  document.querySelectorAll('.cta [data-mode]').forEach((a) => a.addEventListener('click', () => {
+    setMode(a.dataset.mode);
+    setTimeout(() => locInput.focus({ preventScroll: true }), 600);
+  }));
+
+  /* crops */
+  getJSON('/api/crops').then((d) => {
+    cropSel.textContent = '';
+    if (!d.crops.length) { cropSel.append(new Option(window.AGRI_T ? window.AGRI_T('chooseCrop') : 'No price data loaded', '')); return; }
+    cropSel.append(new Option(window.AGRI_T ? window.AGRI_T('selectCrop') : 'Select a crop', ''));
+    d.crops.forEach((c) => cropSel.append(new Option(c, c)));
+  }).catch(() => {
+    cropSel.textContent = '';
+    cropSel.append(new Option(window.AGRI_T ? window.AGRI_T('serverError') : 'Could not load crops', ''));
+    say(window.AGRI_T ? window.AGRI_T('serverError') : 'Cannot reach the server. Start it with "python app.py" and open http://127.0.0.1:5000', true);
+  });
+
+  /* location suggestions */
+  locInput.addEventListener('input', () => {
+    coords = null;
+    clearTimeout(suggestTimer);
+    const q = locInput.value.trim();
+    if (q.length < 2) return;
+    suggestTimer = setTimeout(() => {
+      getJSON('/api/places?q=' + encodeURIComponent(q)).then((d) => {
+        const list = $('place-list');
+        list.textContent = '';
+        d.places.forEach((p) => { const o = document.createElement('option'); o.value = p.name; o.label = p.state || ''; list.append(o); });
+      }).catch(() => {});
+    }, 200);
+  });
+
+  /* geolocation */
+  geoBtn.addEventListener('click', () => {
+    if (!navigator.geolocation) { say('Your browser cannot share its location. Please type a place instead.', true); return; }
+    say('Finding your location…');
+    navigator.geolocation.getCurrentPosition((pos) => {
+      coords = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+      locInput.value = 'My location (' + coords.lat.toFixed(3) + ', ' + coords.lon.toFixed(3) + ')';
+      say('Location set. Choose a crop and press Compare.');
+    }, (e) => {
+      coords = null;
+      say(e.code === 1 ? 'Location permission was denied. Please type your town or district instead.'
+                       : 'Could not get your location. Please type your town or district instead.', true);
+    }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 });
+  });
+
+  /* submit */
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const location = locInput.value.trim();
+    if (!location) { say('Please enter your location.', true); locInput.focus(); return; }
+    if (!cropSel.value) { say('Please choose a crop.', true); cropSel.focus(); return; }
+    const params = new URLSearchParams({ crop: cropSel.value, radius: radiusSel.value, mode: mode, limit: '6' });
+    if (coords && location.startsWith('My location')) { params.set('lat', coords.lat); params.set('lon', coords.lon); }
+    else params.set('location', location);
+
+    const myId = ++requestId;
+    goBtn.disabled = true; goBtn.textContent = 'Comparing…'; say('Comparing nearby mandis…');
+    try {
+      const data = await getJSON('/api/compare?' + params.toString());
+      if (myId !== requestId) return;
+      render(data);
+      say('');
+    } catch (e) {
+      if (myId !== requestId) return;
+      resultsBox.hidden = true;
+      say(e.message, true);
+    } finally {
+      if (myId === requestId) { goBtn.disabled = false; goBtn.textContent = 'Compare mandis'; }
+    }
+  });
+
+  /* rendering */
+  function render(d) {
+    const seller = d.mode === 'seller';
+    resultsBox.hidden = false;
+
+    const banner = $('banner');
+    banner.className = 'banner ' + (d.data_source === 'live' ? 'live' : 'demo');
+    banner.textContent = d.data_source === 'live'
+      ? (window.AGRI_T ? window.AGRI_T('livePrefix') : 'Live Agmarknet prices, as of ') + d.as_of + '.'
+      : (window.AGRI_T ? window.AGRI_T('demoPrefix') : 'DEMO DATA: these prices are simulated for testing and are not real market rates. (As of ') + d.as_of + '.)';
+
+    const b = d.best;
+    const best = $('best');
+    best.textContent = '';
+    best.append(el('small', '', (window.AGRI_T ? window.AGRI_T(seller ? 'bestSell' : 'bestBuy') : (seller ? 'Best mandi to sell at' : 'Best mandi to buy from'))));
+    best.append(el('h3', '', b.market + (b.district && b.district !== b.market ? ', ' + b.district : '') + ' (' + b.state + ')'));
+    const figs = el('div', 'figs');
+    [[b.distance_km + ' km', (window.AGRI_T ? window.AGRI_T('from') : 'from ') + d.location.label],
+     [inr(b.expected_price), b.basis === 'forecast' ? (window.AGRI_T ? window.AGRI_T('expected') : 'expected price, next 7 days') : (window.AGRI_T ? window.AGRI_T('latest') : 'latest price')],
+     [inr(b.net_price), window.AGRI_T ? window.AGRI_T(seller ? 'afterTransport' : 'includingTransport') : (seller ? 'you receive after transport' : 'you pay including transport')]].forEach((f) => {
+      const w = el('div', 'fig'); w.append(el('b', '', f[0]), el('span', '', f[1])); figs.append(w);
+    });
+    best.append(figs, el('p', '', d.advice));
+
+    $('net-head').textContent = window.AGRI_T ? window.AGRI_T(seller ? 'receive' : 'pay') : (seller ? 'You receive (after transport)' : 'You pay (incl. transport)');
+    $('table-cap').textContent = 'Nearby mandis for ' + d.crop + ', ranked';
+    const tbody = $('rows');
+    tbody.textContent = '';
+    d.results.forEach((r) => {
+      const tr = el('tr', r.rank === 1 ? 'top' : '');
+      tr.append(el('td', 'num', String(r.rank)));
+
+      const tdName = el('td'); tdName.append(document.createTextNode(r.market));
+      if (r.source === 'demo') tdName.append(el('span', 'chip', window.AGRI_T ? window.AGRI_T('demoChip') : 'DEMO'));
+      tdName.append(el('span', 'sub', [r.district, r.state].filter(Boolean).join(', ')));
+      tr.append(tdName);
+
+      const tdDist = el('td', 'num', r.distance_km + ' km');
+      tdDist.append(el('span', 'sub', '≈ ' + r.road_km_est + (window.AGRI_T ? window.AGRI_T('road') : ' km by road')));
+      tr.append(tdDist);
+
+      const tdNow = el('td', 'num', inr(r.latest_modal));
+      tdNow.append(el('span', 'sub', (window.AGRI_T ? window.AGRI_T('on') : 'on ') + r.latest_date));
+      tr.append(tdNow);
+
+      const tdFc = el('td', 'num');
+      if (r.basis === 'forecast') {
+        tdFc.textContent = inr(r.expected_price);
+        const ch = (r.expected_price - r.latest_modal) / r.latest_modal * 100;
+        const t = el('span', 'sub ' + (ch > 0.5 ? 'up' : ch < -0.5 ? 'down' : ''),
+          (ch > 0.05 ? '▲ +' + ch.toFixed(1) : ch < -0.05 ? '▼ ' + Math.abs(ch).toFixed(1) : '0.0') + '% vs today');
+        tdFc.append(t);
+      } else {
+        tdFc.textContent = '—';
+        tdFc.append(el('span', 'sub', (window.AGRI_T ? window.AGRI_T('noHistory') : 'not enough history')));
+      }
+      tr.append(tdFc);
+
+      tr.append(el('td', 'num', inr(r.transport_cost)));
+      tr.append(el('td', 'num net', inr(r.net_price)));
+      tbody.append(tr);
+    });
+
+    drawChart(d);
+
+    $('chart-note').textContent = 'Forecast basis: ' + d.results.map((r) =>
+      r.market + ' – ' + (r.method === 'ridge' ? 'AI model (typical 7-day error about ' + r.mape + '%)'
+        : r.method === 'persistence' ? 'no reliable trend, shown flat' : (window.AGRI_T ? window.AGRI_T('noHistory') : 'not enough history'))).join('; ') + '.';
+
+    const a = d.assumptions;
+    let fine = 'Prices are modal (most common) wholesale prices in ₹ per quintal. Transport is estimated at ₹' +
+      a.transport_rs_per_qtl_km + ' per quintal per km on road distance (about ' + a.road_factor + '× the straight-line distance); ' +
+      'your real cost depends on load size and vehicle.';
+    if (d.expanded_search) fine += ' Fewer than 3 mandis with data were found within ' + d.radius_km + ' km, so the nearest ones are shown instead.';
+    if (d.excluded_stale) fine += ' ' + d.excluded_stale + ' mandi(s) were left out because they have not reported recently.';
+    $('fine').textContent = fine;
+
+    resultsBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function drawChart(d) {
+    const note = $('chart-note');
+    if (typeof Chart === 'undefined') {
+      note.textContent = 'The chart library could not be loaded (check your internet connection).';
+      return;
+    }
+    const dateSet = new Set();
+    d.results.forEach((r) => { r.history.forEach((p) => dateSet.add(p.date)); r.forecast.forEach((p) => dateSet.add(p.date)); });
+    const labels = Array.from(dateSet).sort();
+    const datasets = [];
+    d.results.forEach((r, i) => {
+      const color = COLORS[i % COLORS.length];
+      const hist = new Map(r.history.map((p) => [p.date, p.modal]));
+      const fc = new Map(r.forecast.map((p) => [p.date, p.modal]));
+      const lastHist = r.history.length ? r.history[r.history.length - 1] : null;
+      if (lastHist && fc.size) fc.set(lastHist.date, lastHist.modal);   // join forecast to history
+      const base = { borderColor: color, backgroundColor: color, pointRadius: 0, pointHoverRadius: 4,
+                     borderWidth: i === 0 ? 3 : 1.75, spanGaps: true, tension: 0.2 };
+      datasets.push(Object.assign({ label: r.rank + '. ' + r.market, data: labels.map((l) => hist.has(l) ? hist.get(l) : null) }, base));
+      if (fc.size) datasets.push(Object.assign({ label: r.market + ' (forecast)', data: labels.map((l) => fc.has(l) ? fc.get(l) : null),
+        borderDash: [6, 5] }, base));
+    });
+    if (chart) chart.destroy();
+    chart = new Chart($('chart'), {
+      type: 'line',
+      data: { labels: labels, datasets: datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+        scales: {
+          x: { ticks: { maxTicksLimit: 8, autoSkip: true }, grid: { display: false } },
+          y: { title: { display: true, text: '₹ per quintal' }, ticks: { callback: (v) => '₹' + Number(v).toLocaleString('en-IN') } }
+        },
+        plugins: {
+          legend: { position: 'bottom', labels: { boxWidth: 14, filter: (item) => !/\(forecast\)$/.test(item.text) } },
+          tooltip: { callbacks: { label: (c) => c.dataset.label + ': ' + (c.parsed.y == null ? '' : '₹' + Math.round(c.parsed.y).toLocaleString('en-IN')) } }
+        }
+      }
+    });
+  }
+})();
+
+/* ---------- English / Kannada interface + Harvest Advisor ---------- */
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const translations = {
+    en: {
+      heroTitle:'Connecting Farmers to Better Markets.',heroLead:'Empowering farmers and buyers through agricultural market intelligence.',buyer:'BUYER',seller:'SELLER',
+      navHome:'HOME',navPrices:'MANDI PRICES',navBlog:'BLOG',navAbout:'ABOUT US',navContact:'CONTACT US',
+      finderTitle:'Find the best mandi near you',finderLead:'Enter your village, town or district. Compare nearby mandis, review the next 7-day outlook and account for estimated transport costs.',
+      sell:'I want to SELL',buy:'I want to BUY',location:'Location',locationPlaceholder:'e.g. Kolar, Hosur or Bengaluru',useLocation:'📍 Use my location',crop:'Crop',radius:'Search radius',compare:'Compare mandis',
+      selectCrop:'Select a crop',loadingCrops:'Loading crops…',chooseCrop:'Choose a crop',chooseState:'Choose a state',
+      advisorEyebrow:'FIELD PLANNING TOOL',advisorTitle:'Harvest Advisor',advisorLead:'Plan a harvest using your crop, sowing date and the maturity period recommended for your variety.',
+      state:'State',sowing:'Sowing / transplanting date',duration:'Variety maturity period (days)',durationHelp:'Use the seed packet or local agriculture officer’s recommendation. Leave blank if unknown.',getAdvice:'Get harvest guidance',advisorDisclaimer:'Guidance is for planning only. Actual harvest readiness depends on variety, weather and field conditions. This tool does not use live weather or claim an exact harvest date.',
+      servicesEyebrow:'SUPPORT FOR EVERY SEASON',servicesTitle:'Agricultural Services',servicesLead:'Practical tools to help farmers make informed decisions from sowing to selling.',
+      service1Title:'Mandi Price Insights',service1Text:'Compare nearby market prices and estimated transport costs before choosing where to sell or buy.',service2Title:'Harvest Planning',service2Text:'Estimate crop maturity from your sowing date and variety guidance, then check field signs.',service3Title:'Nearby Market Discovery',service3Text:'Find mandi options using your town or device location, where permission is available.',service4Title:'Price Trend Forecasts',service4Text:'Review short-term statistical price outlooks when enough market history is available.',
+      radius50:'50 km',radius100:'100 km',radius200:'200 km',radius300:'300 km',
+      menu:'Menu',languageLabel:'Language',chartTitle:'Price trend and 7-day forecast',
+      readiness:['Check the crop-specific maturity signs for your variety (grain/fruit size, colour, firmness or dry-down as applicable).','Inspect several representative plants across the field, not just the field edge.','Check soil moisture and the short-term local weather before harvesting; avoid harvesting wet produce where drying is required.','Confirm the recommended harvest stage and post-harvest handling with your local Krishi Vigyan Kendra or agriculture officer.'],
+      storyTitle:'Growing Together, Selling Smarter.',storyText:'AGRISAARTHI brings farmers and buyers onto one trusted platform. Our market tools help farmers compare mandi prices and plan where and when to sell with greater confidence.',learn:'Learn how it works',footer:'© 2026 AGRISAARTHI. Connecting farmers to better markets.',
+      livePrefix:'Live Agmarknet prices, as of ',demoPrefix:'DEMO DATA: these prices are simulated for testing and are not real market rates. (As of ',bestSell:'Best mandi to sell at',bestBuy:'Best mandi to buy from',from:'from ',expected:'expected price, next 7 days',latest:'latest price',afterTransport:'you receive after transport',includingTransport:'you pay including transport',road:' km by road',on:'on ',noHistory:(window.AGRI_T ? window.AGRI_T('noHistory') : 'not enough history'),demoChip:'DEMO',
+      needInputs:'Choose a crop and state and enter the sowing date.',working:'Preparing your harvest guidance…',estimate:'Estimated maturity date',noDuration:'No maturity period was provided. Add the duration from your seed or variety guidance to calculate a planning date.',checks:'Field readiness checklist',planning:'Planning estimate only',notCalendar:'No crop-specific official calendar or live weather feed is connected. Confirm the maturity signs for your variety with your local agriculture officer / KVK.',
+      tableMandi:'Mandi',tableDistance:'Distance',tableToday:'Today',tableForecast:'Next 7 days (avg)',tableTransport:'Transport',
+      livePrice:'Live Agmarknet prices',demoPrice:'DEMO DATA: simulated prices for testing only — not real market rates.',
+      bestSell:'Best mandi to sell at',bestBuy:'Best mandi to buy from',receive:'You receive (after transport)',pay:'You pay (including transport)',
+      locationError:'Please enter your location.',cropError:'Please choose a crop.',serverError:'Cannot reach the server. Start it with “python app.py”.',
+    },
+    kn: {
+      heroTitle:'ರೈತರನ್ನು ಉತ್ತಮ ಮಾರುಕಟ್ಟೆಗಳಿಗೆ ಸಂಪರ್ಕಿಸುವುದು.',heroLead:'ಕೃಷಿ ಮಾರುಕಟ್ಟೆ ಮಾಹಿತಿಯ ಮೂಲಕ ರೈತರು ಮತ್ತು ಖರೀದಿದಾರರಿಗೆ ಶಕ್ತಿ ನೀಡುವುದು.',buyer:'ಖರೀದಿದಾರ',seller:'ಮಾರಾಟಗಾರ',
+      navHome:'ಮುಖಪುಟ',navPrices:'ಮಾರುಕಟ್ಟೆ ಬೆಲೆಗಳು',navBlog:'ಬ್ಲಾಗ್',navAbout:'ನಮ್ಮ ಬಗ್ಗೆ',navContact:'ಸಂಪರ್ಕಿಸಿ',
+      finderTitle:'ನಿಮ್ಮ ಸಮೀಪದ ಉತ್ತಮ ಮಾರುಕಟ್ಟೆ ಹುಡುಕಿ',finderLead:'ನಿಮ್ಮ ಗ್ರಾಮ, ಪಟ್ಟಣ ಅಥವಾ ಜಿಲ್ಲೆಯನ್ನು ನಮೂದಿಸಿ. ಸಮೀಪದ ಮಾರುಕಟ್ಟೆಗಳನ್ನು ಹೋಲಿಸಿ, ಮುಂದಿನ 7 ದಿನಗಳ ಬೆಲೆ ಮುನ್ನೋಟ ಮತ್ತು ಅಂದಾಜು ಸಾಗಣೆ ವೆಚ್ಚ ಪರಿಶೀಲಿಸಿ.',
+      sell:'ನಾನು ಮಾರಾಟ ಮಾಡಲು ಬಯಸುತ್ತೇನೆ',buy:'ನಾನು ಖರೀದಿಸಲು ಬಯಸುತ್ತೇನೆ',location:'ಸ್ಥಳ',locationPlaceholder:'ಉದಾ. ಕೋಲಾರ, ಹೊಸೂರು ಅಥವಾ ಬೆಂಗಳೂರು',useLocation:'📍 ನನ್ನ ಸ್ಥಳ ಬಳಸಿ',crop:'ಬೆಳೆ',radius:'ಹುಡುಕಾಟದ ವ್ಯಾಪ್ತಿ',compare:'ಮಾರುಕಟ್ಟೆಗಳನ್ನು ಹೋಲಿಸಿ',
+      selectCrop:'ಬೆಳೆ ಆಯ್ಕೆಮಾಡಿ',loadingCrops:'ಬೆಳೆಗಳ ಮಾಹಿತಿ ಲೋಡ್ ಆಗುತ್ತಿದೆ…',chooseCrop:'ಬೆಳೆ ಆಯ್ಕೆಮಾಡಿ',chooseState:'ರಾಜ್ಯ ಆಯ್ಕೆಮಾಡಿ',
+      advisorEyebrow:'ಬೆಳೆ ಯೋಜನಾ ಸಾಧನ',advisorTitle:'ಕೊಯ್ಲು ಸಲಹೆಗಾರ',advisorLead:'ನಿಮ್ಮ ಬೆಳೆ, ಬಿತ್ತನೆ ದಿನಾಂಕ ಮತ್ತು ತಳಿಗೆ ಶಿಫಾರಸು ಮಾಡಿದ ಪಕ್ವತಾ ಅವಧಿಯ ಆಧಾರದ ಮೇಲೆ ಕೊಯ್ಲು ಯೋಜಿಸಿ.',
+      state:'ರಾಜ್ಯ',sowing:'ಬಿತ್ತನೆ / ನಾಟಿ ದಿನಾಂಕ',duration:'ತಳಿಯ ಪಕ್ವತಾ ಅವಧಿ (ದಿನಗಳು)',durationHelp:'ಬೀಜದ ಪ್ಯಾಕೆಟ್ ಅಥವಾ ಸ್ಥಳೀಯ ಕೃಷಿ ಅಧಿಕಾರಿಯ ಶಿಫಾರಸನ್ನು ಬಳಸಿ. ತಿಳಿದಿಲ್ಲದಿದ್ದರೆ ಖಾಲಿ ಬಿಡಿ.',getAdvice:'ಕೊಯ್ಲು ಮಾರ್ಗದರ್ಶನ ಪಡೆಯಿರಿ',advisorDisclaimer:'ಈ ಮಾರ್ಗದರ್ಶನ ಯೋಜನೆಗಾಗಿ ಮಾತ್ರ. ನಿಜವಾದ ಕೊಯ್ಲಿನ ಸಿದ್ಧತೆ ತಳಿ, ಹವಾಮಾನ ಮತ್ತು ಹೊಲದ ಪರಿಸ್ಥಿತಿಗಳ ಮೇಲೆ ಅವಲಂಬಿತವಾಗಿದೆ. ಈ ಸಾಧನವು ನೇರ ಹವಾಮಾನ ಮಾಹಿತಿಯನ್ನು ಬಳಸುವುದಿಲ್ಲ ಅಥವಾ ನಿಖರ ಕೊಯ್ಲು ದಿನಾಂಕವನ್ನು ಖಚಿತಪಡಿಸುವುದಿಲ್ಲ.',
+      servicesEyebrow:'ಪ್ರತಿ ಋತುವಿಗೂ ಬೆಂಬಲ',servicesTitle:'ಕೃಷಿ ಸೇವೆಗಳು',servicesLead:'ಬಿತ್ತನೆಯಿಂದ ಮಾರಾಟದವರೆಗೆ ತಿಳಿದ ನಿರ್ಧಾರಗಳನ್ನು ತೆಗೆದುಕೊಳ್ಳಲು ರೈತರಿಗೆ ಸಹಾಯ ಮಾಡುವ ಉಪಯುಕ್ತ ಸಾಧನಗಳು.',
+      service1Title:'ಮಾರುಕಟ್ಟೆ ಬೆಲೆ ಮಾಹಿತಿ',service1Text:'ಮಾರಾಟ ಅಥವಾ ಖರೀದಿ ಸ್ಥಳ ಆಯ್ಕೆಮಾಡುವ ಮೊದಲು ಸಮೀಪದ ಮಾರುಕಟ್ಟೆ ಬೆಲೆ ಮತ್ತು ಅಂದಾಜು ಸಾಗಣೆ ವೆಚ್ಚ ಹೋಲಿಸಿ.',service2Title:'ಕೊಯ್ಲು ಯೋಜನೆ',service2Text:'ಬಿತ್ತನೆ ದಿನಾಂಕ ಮತ್ತು ತಳಿ ಮಾರ್ಗದರ್ಶನದಿಂದ ಪಕ್ವತೆಯನ್ನು ಅಂದಾಜಿಸಿ, ನಂತರ ಹೊಲದ ಲಕ್ಷಣಗಳನ್ನು ಪರಿಶೀಲಿಸಿ.',service3Title:'ಸಮೀಪದ ಮಾರುಕಟ್ಟೆ ಹುಡುಕಾಟ',service3Text:'ನಿಮ್ಮ ಪಟ್ಟಣ ಅಥವಾ ಅನುಮತಿ ನೀಡಿದಲ್ಲಿ ಸಾಧನದ ಸ್ಥಳದ ಮೂಲಕ ಮಾರುಕಟ್ಟೆಗಳನ್ನು ಹುಡುಕಿ.',service4Title:'ಬೆಲೆ ಪ್ರವೃತ್ತಿ ಮುನ್ನೋಟ',service4Text:'ಸಾಕಷ್ಟು ಮಾರುಕಟ್ಟೆ ಇತಿಹಾಸ ಲಭ್ಯವಿದ್ದಾಗ ಅಲ್ಪಾವಧಿಯ ಅಂಕಿಅಂಶ ಆಧಾರಿತ ಬೆಲೆ ಮುನ್ನೋಟ ಪರಿಶೀಲಿಸಿ.',
+      radius50:'50 ಕಿ.ಮೀ',radius100:'100 ಕಿ.ಮೀ',radius200:'200 ಕಿ.ಮೀ',radius300:'300 ಕಿ.ಮೀ',
+      menu:'ಮೆನು',languageLabel:'ಭಾಷೆ',chartTitle:'ಬೆಲೆ ಪ್ರವೃತ್ತಿ ಮತ್ತು 7 ದಿನಗಳ ಮುನ್ನೋಟ',
+      readiness:['ನಿಮ್ಮ ತಳಿಗೆ ಸೂಕ್ತವಾದ ಪಕ್ವತಾ ಲಕ್ಷಣಗಳನ್ನು ಪರಿಶೀಲಿಸಿ (ಧಾನ್ಯ / ಹಣ್ಣಿನ ಗಾತ್ರ, ಬಣ್ಣ, ಗಟ್ಟಿತನ ಅಥವಾ ಒಣಗುವಿಕೆ).','ಹೊಲದ ಅಂಚಿನಲ್ಲಿ ಮಾತ್ರವಲ್ಲದೆ ವಿವಿಧ ಭಾಗಗಳಲ್ಲಿನ ಕೆಲವು ಪ್ರತಿನಿಧಿ ಗಿಡಗಳನ್ನು ಪರಿಶೀಲಿಸಿ.','ಕೊಯ್ಲಿಗೆ ಮೊದಲು ಮಣ್ಣಿನ ತೇವಾಂಶ ಮತ್ತು ಸ್ಥಳೀಯ ಹವಾಮಾನ ಪರಿಶೀಲಿಸಿ; ಒಣಗಿಸಬೇಕಾದ ಉತ್ಪನ್ನವನ್ನು ಒದ್ದೆಯಾಗಿ ಕೊಯ್ಯುವುದನ್ನು ತಪ್ಪಿಸಿ.','ಶಿಫಾರಸು ಮಾಡಿದ ಕೊಯ್ಲಿನ ಹಂತ ಮತ್ತು ಕೊಯ್ಲಿನ ನಂತರದ ನಿರ್ವಹಣೆಯನ್ನು ಸ್ಥಳೀಯ ಕೃಷಿ ವಿಜ್ಞಾನ ಕೇಂದ್ರ ಅಥವಾ ಕೃಷಿ ಅಧಿಕಾರಿಯಿಂದ ದೃಢಪಡಿಸಿ.'],
+      storyTitle:'ಒಟ್ಟಾಗಿ ಬೆಳೆಯೋಣ, ಬುದ್ಧಿವಂತಿಕೆಯಿಂದ ಮಾರಾಟ ಮಾಡೋಣ.',storyText:'AGRISAARTHI ರೈತರು ಮತ್ತು ಖರೀದಿದಾರರನ್ನು ಒಂದೇ ವಿಶ್ವಾಸಾರ್ಹ ವೇದಿಕೆಯಲ್ಲಿ ಸಂಪರ್ಕಿಸುತ್ತದೆ. ಮಾರುಕಟ್ಟೆ ಸಾಧನಗಳು ಬೆಲೆಗಳನ್ನು ಹೋಲಿಸಿ ಉತ್ತಮ ಮಾರಾಟ ನಿರ್ಧಾರಗಳನ್ನು ಕೈಗೊಳ್ಳಲು ಸಹಾಯ ಮಾಡುತ್ತವೆ.',learn:'ಇದು ಹೇಗೆ ಕಾರ್ಯನಿರ್ವಹಿಸುತ್ತದೆ',footer:'© 2026 AGRISAARTHI. ರೈತರನ್ನು ಉತ್ತಮ ಮಾರುಕಟ್ಟೆಗಳಿಗೆ ಸಂಪರ್ಕಿಸುವುದು.',
+      livePrefix:'ನೇರ ಅಗ್ರಿಮಾರ್ಕ್‌ನೆಟ್ ಬೆಲೆಗಳು, ದಿನಾಂಕ: ',demoPrefix:'ಡೆಮೋ ಮಾಹಿತಿ: ಪರೀಕ್ಷೆಗಾಗಿ ಸೃಷ್ಟಿಸಿದ ಬೆಲೆಗಳು — ನೈಜ ಮಾರುಕಟ್ಟೆ ದರಗಳಲ್ಲ. (ದಿನಾಂಕ: ',bestSell:'ಮಾರಾಟಕ್ಕೆ ಉತ್ತಮ ಮಾರುಕಟ್ಟೆ',bestBuy:'ಖರೀದಿಗೆ ಉತ್ತಮ ಮಾರುಕಟ್ಟೆ',from:'ಇಂದಿನ ದೂರ ',expected:'ಮುಂದಿನ 7 ದಿನಗಳ ನಿರೀಕ್ಷಿತ ಬೆಲೆ',latest:'ಇತ್ತೀಚಿನ ಬೆಲೆ',afterTransport:'ಸಾಗಣೆ ನಂತರ ನಿಮಗೆ ಸಿಗುವುದು',includingTransport:'ಸಾಗಣೆ ಸೇರಿ ನೀವು ಪಾವತಿಸುವುದು',road:' ಕಿ.ಮೀ ರಸ್ತೆ ಮಾರ್ಗ',on:'ದಿನಾಂಕ ',noHistory:'ಸಾಕಷ್ಟು ಹಿಂದಿನ ಮಾಹಿತಿ ಇಲ್ಲ',demoChip:'ಡೆಮೋ',
+      needInputs:'ಬೆಳೆ ಮತ್ತು ರಾಜ್ಯ ಆಯ್ಕೆಮಾಡಿ, ಬಿತ್ತನೆ ದಿನಾಂಕ ನಮೂದಿಸಿ.',working:'ಕೊಯ್ಲು ಮಾರ್ಗದರ್ಶನ ಸಿದ್ಧಪಡಿಸಲಾಗುತ್ತಿದೆ…',estimate:'ಅಂದಾಜು ಪಕ್ವತಾ ದಿನಾಂಕ',noDuration:'ಪಕ್ವತಾ ಅವಧಿ ನೀಡಲಾಗಿಲ್ಲ. ಯೋಜನಾ ದಿನಾಂಕ ಲೆಕ್ಕಿಸಲು ಬೀಜ ಅಥವಾ ತಳಿ ಮಾರ್ಗದರ್ಶನದಲ್ಲಿನ ಅವಧಿ ನಮೂದಿಸಿ.',checks:'ಹೊಲದಲ್ಲಿ ಸಿದ್ಧತೆ ಪರಿಶೀಲನೆ',planning:'ಯೋಜನಾ ಅಂದಾಜು ಮಾತ್ರ',notCalendar:'ಬೆಳೆ-ನಿರ್ದಿಷ್ಟ ಅಧಿಕೃತ ಕ್ಯಾಲೆಂಡರ್ ಅಥವಾ ನೇರ ಹವಾಮಾನ ಮಾಹಿತಿ ಸಂಪರ್ಕಗೊಂಡಿಲ್ಲ. ನಿಮ್ಮ ತಳಿಯ ಪಕ್ವತಾ ಲಕ್ಷಣಗಳನ್ನು ಸ್ಥಳೀಯ ಕೃಷಿ ಅಧಿಕಾರಿ / ಕೃಷಿ ವಿಜ್ಞಾನ ಕೇಂದ್ರದೊಂದಿಗೆ ದೃಢಪಡಿಸಿ.',
+      tableMandi:'ಮಾರುಕಟ್ಟೆ',tableDistance:'ದೂರ',tableToday:'ಇಂದು',tableForecast:'ಮುಂದಿನ 7 ದಿನಗಳು (ಸರಾಸರಿ)',tableTransport:'ಸಾಗಣೆ',livePrice:'ನೇರ ಅಗ್ರಿಮಾರ್ಕ್‌ನೆಟ್ ಬೆಲೆಗಳು',demoPrice:'ಡೆಮೋ ಮಾಹಿತಿ: ಪರೀಕ್ಷೆಗಾಗಿ ಸೃಷ್ಟಿಸಿದ ಬೆಲೆಗಳು — ನೈಜ ಮಾರುಕಟ್ಟೆ ದರಗಳಲ್ಲ.',
+      bestSell:'ಮಾರಾಟಕ್ಕೆ ಉತ್ತಮ ಮಾರುಕಟ್ಟೆ',bestBuy:'ಖರೀದಿಗೆ ಉತ್ತಮ ಮಾರುಕಟ್ಟೆ',receive:'ಸಾಗಣೆ ನಂತರ ನಿಮಗೆ ಸಿಗುವುದು',pay:'ಸಾಗಣೆ ಸೇರಿ ನೀವು ಪಾವತಿಸುವುದು',locationError:'ದಯವಿಟ್ಟು ನಿಮ್ಮ ಸ್ಥಳ ನಮೂದಿಸಿ.',cropError:'ದಯವಿಟ್ಟು ಬೆಳೆ ಆಯ್ಕೆಮಾಡಿ.',serverError:'ಸರ್ವರ್ ಸಂಪರ್ಕವಾಗುತ್ತಿಲ್ಲ. “python app.py” ಮೂಲಕ ಪ್ರಾರಂಭಿಸಿ.'
+    }
+  };
+  const selectorMap = {
+    '[data-i18n="heroTitle"]':'heroTitle','[data-i18n="heroLead"]':'heroLead','.cta [data-mode="buyer"]':'buyer','.cta [data-mode="seller"]':'seller',
+    '.links a[href="#home"]':'navHome','.links a[href="#finder"]':'navPrices','.links a[href="#blog"]':'navBlog','.links a[href="#about"]':'navAbout','.links a[href="#contact"]':'navContact',
+    '#finder-title':'finderTitle','.finder-lead':'finderLead','.mode-btn[data-mode="seller"]':'sell','.mode-btn[data-mode="buyer"]':'buy',
+    '.field-loc>span':'location','#geo-btn':'useLocation','.field:not(.field-loc)>span':'crop',
+    '#harvest-title':'advisorTitle','.section-heading [data-i18n="advisorEyebrow"]':'advisorEyebrow','[data-i18n="advisorLead"]':'advisorLead',
+    '[data-i18n="servicesEyebrow"]':'servicesEyebrow','[data-i18n="servicesTitle"]':'servicesTitle','[data-i18n="servicesLead"]':'servicesLead',
+    '[data-i18n="service1Title"]':'service1Title','[data-i18n="service1Text"]':'service1Text','[data-i18n="service2Title"]':'service2Title','[data-i18n="service2Text"]':'service2Text','[data-i18n="service3Title"]':'service3Title','[data-i18n="service3Text"]':'service3Text','[data-i18n="service4Title"]':'service4Title','[data-i18n="service4Text"]':'service4Text',
+    '.story h2':'storyTitle','.story p':'storyText','.more':'learn','footer':'footer',
+    '.chart-card h3':'chartTitle',
+    '[data-i18n="cropLabel"]':'crop','[data-i18n="stateLabel"]':'state','[data-i18n="sowingLabel"]':'sowing','[data-i18n="durationLabel"]':'duration','[data-i18n="durationHelp"]':'durationHelp','[data-i18n="getAdvice"]':'getAdvice','[data-i18n="advisorDisclaimer"]':'advisorDisclaimer'
+  };
+  let language = localStorage.getItem('agrisaarthi-language') || 'en';
+  const t = (key) => (translations[language] && translations[language][key]) || translations.en[key] || key;
+  window.AGRI_T = t;
+  function applyLanguage(next) {
+    language = next === 'kn' ? 'kn' : 'en';
+    document.documentElement.lang = language;
+    const picker = $('language'); if (picker) picker.value = language;
+    localStorage.setItem('agrisaarthi-language', language);
+    Object.entries(selectorMap).forEach(([selector,key]) => {
+      const nodes = document.querySelectorAll(selector);
+      nodes.forEach((node) => { if (node) node.textContent = t(key); });
+    });
+    const loc = $('loc'); if (loc) loc.placeholder = t('locationPlaceholder');
+    const lang = $('language'); if (lang) lang.setAttribute('aria-label', language === 'kn' ? 'ಭಾಷೆ ಆಯ್ಕೆಮಾಡಿ' : 'Select language');
+    const radius = $('radius'); if (radius) [...radius.options].forEach(o => { const key = 'radius' + o.value; if (t(key) !== key) o.textContent = t(key); });
+    const crop = $('crop'); if (crop && crop.options.length && !crop.value) crop.options[0].textContent = t('selectCrop');
+    const harvestCrop = $('harvest-crop'); if (harvestCrop && harvestCrop.options.length) harvestCrop.options[0].textContent = t('chooseCrop');
+    const state = $('harvest-state'); if (state && state.options.length) state.options[0].textContent = t('chooseState');
+    const go = $('go'); if (go && !go.disabled) go.textContent = t('compare');
+    const modeBtns = document.querySelectorAll('.mode-btn'); modeBtns.forEach((node) => { node.textContent = t(node.dataset.mode === 'seller' ? 'sell' : 'buy'); });
+    const fields = document.querySelectorAll('.fields .field'); if (fields[1]) fields[1].querySelector('span').textContent=t('crop'); if (fields[2]) fields[2].querySelector('span').textContent=t('radius');
+    const chartSmall = document.querySelector('.chart-card h3 small'); if (chartSmall) chartSmall.textContent = language === 'kn' ? '(ಪ್ರತಿ ಕ್ವಿಂಟಲ್‌ಗೆ ₹, ಮಾದರಿ ಬೆಲೆ)' : '(₹ per quintal, modal price)';
+    const tableHeaders = document.querySelectorAll('.mtable thead th');
+    if (tableHeaders.length >= 7) { tableHeaders[1].textContent=t('tableMandi');tableHeaders[2].textContent=t('tableDistance');tableHeaders[3].textContent=t('tableToday');tableHeaders[4].textContent=t('tableForecast');tableHeaders[5].textContent=t('tableTransport'); }
+    if ($('net-head')) $('net-head').textContent = t('receive');
+  }
+  $('language')?.addEventListener('change', (e) => applyLanguage(e.target.value));
+
+  const states = ['Andaman and Nicobar Islands','Andhra Pradesh','Arunachal Pradesh','Assam','Bihar','Chandigarh','Chhattisgarh','Dadra and Nagar Haveli and Daman and Diu','Delhi','Goa','Gujarat','Haryana','Himachal Pradesh','Jharkhand','Jammu and Kashmir','Karnataka','Ladakh','Lakshadweep','Kerala','Madhya Pradesh','Maharashtra','Manipur','Meghalaya','Mizoram','Nagaland','Odisha','Puducherry','Punjab','Rajasthan','Sikkim','Tamil Nadu','Telangana','Tripura','Uttar Pradesh','Uttarakhand','West Bengal'];
+  const stateSel = $('harvest-state'); states.forEach((s) => stateSel?.add(new Option(s,s)));
+  async function loadHarvestCrops() {
+    try { const res=await fetch('/api/crops'); if(!res.ok) throw new Error(); const data=await res.json();
+      const sel=$('harvest-crop'); sel.textContent=''; sel.add(new Option(t('chooseCrop'),''));
+      data.crops.forEach((crop)=>sel.add(new Option(crop,crop)));
+      const main=$('crop'); if(main && main.options.length>1) { const options=[...main.options].slice(1); options.forEach(o=>sel.add(new Option(o.text,o.value))); }
+    } catch (_) { $('harvest-result').hidden=false; $('harvest-result').textContent=t('serverError'); }
+  }
+  loadHarvestCrops();
+  $('harvest-form')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const result=$('harvest-result'); result.hidden=false; result.textContent='';
+    const crop=$('harvest-crop').value, state=$('harvest-state').value, sowing=$('sowing-date').value, duration=$('maturity-days').value;
+    if(!crop || !state || !sowing) { result.textContent=t('needInputs'); return; }
+    const button=$('harvest-submit'); button.disabled=true; button.textContent=t('working');
+    try {
+      const response=await fetch('/api/harvest-advisor',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({crop,state,sowing_date:sowing,maturity_days:duration || null})});
+      const data=await response.json(); if(!response.ok) throw new Error(data.error || t('serverError'));
+      const heading=document.createElement('h3'); heading.textContent=data.crop+' · '+data.state; result.append(heading);
+      if(data.estimated_maturity_date) { const p=document.createElement('p'); p.innerHTML='<strong>'+t('estimate')+':</strong> '+new Date(data.estimated_maturity_date+'T00:00:00').toLocaleDateString(language==='kn'?'kn-IN':'en-IN',{day:'numeric',month:'long',year:'numeric'})+' ('+data.maturity_days+' '+(language==='kn'?'ದಿನಗಳು':'days')+' '+(language==='kn'?'ನಿಮ್ಮ ಅವಧಿಯ ಆಧಾರದಲ್ಲಿ':'based on the duration you supplied')+').'; result.append(p); }
+      else { const p=document.createElement('p'); p.textContent=t('noDuration'); result.append(p); }
+      const sub=document.createElement('strong'); sub.textContent=t('checks'); result.append(sub);
+      const ul=document.createElement('ul'); data.readiness_checks.forEach((item,index)=>{const li=document.createElement('li');li.textContent=(translations[language].readiness||translations.en.readiness)[index]||item;ul.append(li);});result.append(ul);
+      const notice=document.createElement('p');notice.className='harvest-disclaimer';notice.textContent=t('planning')+'. '+t('notCalendar');result.append(notice);
+    } catch(error) { result.textContent=error.message; }
+    finally { button.disabled=false; button.textContent=t('getAdvice'); }
+  });
+  applyLanguage(language);
+})();
