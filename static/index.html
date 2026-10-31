@@ -1,1 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AGRISAARTHI – Connecting Farmers to Better Markets</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700;800&family=Figtree:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="icon" href="logo.jpeg" type="image/jpeg">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <nav class="nav" aria-label="Main">
+    <a class="brand" href="#home" aria-label="AGRISAARTHI home">
+      <img class="logo" src="logo.jpeg" alt="AGRISAARTHI logo" width="60" height="60">
+      <span>AGRISAARTHI</span>
+    </a>
+    <div class="nav-tools"><label class="sr" for="language">Language / ಭಾಷೆ</label><select id="language" class="language" aria-label="Select language"><option value="en">English</option><option value="kn">ಕನ್ನಡ</option></select></div>
+    <button class="menu" aria-expanded="false" aria-controls="links" aria-label="Menu"><span></span><span></span><span></span></button>
+    <ul class="links" id="links">
+      <li><a href="#home" aria-current="page">HOME</a></li>
+      <li><a href="#finder">MANDI PRICES</a></li>
+      <li><a href="#blog">BLOG</a></li>
+      <li><a href="#about">ABOUT US</a></li>
+      <li><a href="#contact">CONTACT US</a></li>
+    </ul>
+  </nav>
+</header>
+
+<main id="home">
+  <section class="hero">
+    <img class="hero-image" src="agrisaarthi-hero.jpg" alt="" aria-hidden="true"><div class="hero-shade"></div><div class="hero-content">
+    <h1 data-i18n="heroTitle">Connecting Farmers to Better Markets.</h1>
+    <p data-i18n="heroLead">Empowering farmers and buyers through AI-powered agricultural intelligence.</p>
+    <div class="cta">
+      <a class="btn buyer" href="#finder" data-mode="buyer">BUYER</a>
+      <a class="btn seller" href="#finder" data-mode="seller">SELLER</a>
+    </div></div>
+  </section>
+
+  <section class="finder" id="finder" aria-labelledby="finder-title">
+    <div class="finder-inner">
+      <h2 id="finder-title">Find the best mandi near you</h2>
+      <p class="finder-lead">Enter your village, town or district. Our AI compares nearby mandis, forecasts the next 7 days and subtracts the cost of getting there.</p>
+
+      <form id="finder-form" class="finder-form" autocomplete="off" novalidate>
+        <div class="mode" role="group" aria-label="I am a">
+          <button type="button" class="mode-btn" data-mode="seller" aria-pressed="true">I want to SELL</button>
+          <button type="button" class="mode-btn" data-mode="buyer" aria-pressed="false">I want to BUY</button>
+        </div>
+        <div class="fields">
+          <label class="field field-loc">
+            <span>Location</span>
+            <div class="loc-row">
+              <input id="loc" name="location" type="text" list="place-list" placeholder="e.g. Kolar, Hosur or Bengaluru" aria-describedby="form-msg" required>
+              <button type="button" id="geo-btn" class="ghost" title="Use my current location">📍 Use my location</button>
+            </div>
+            <datalist id="place-list"></datalist>
+          </label>
+          <label class="field">
+            <span>Crop</span>
+            <select id="crop" name="crop" required><option value="">Loading crops…</option></select>
+          </label>
+          <label class="field">
+            <span>Search radius</span>
+            <select id="radius" name="radius">
+              <option value="50">50 km</option>
+              <option value="100">100 km</option>
+              <option value="200" selected>200 km</option>
+              <option value="300">300 km</option>
+            </select>
+          </label>
+          <button type="submit" id="go" class="go">Compare mandis</button>
+        </div>
+        <p id="form-msg" class="form-msg" role="status" aria-live="polite"></p>
+      </form>
+
+      <div id="results" class="results" hidden>
+        <div class="banner" id="banner"></div>
+        <div class="best" id="best"></div>
+        <div class="table-wrap">
+          <table class="mtable">
+            <caption class="sr" id="table-cap">Nearby mandis ranked</caption>
+            <thead><tr>
+              <th>#</th><th>Mandi</th><th>Distance</th><th>Today</th><th>Next 7 days (avg)</th><th>Transport</th><th id="net-head">You receive</th>
+            </tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+        <div class="chart-card">
+          <h3>Price trend and 7-day forecast <small>(₹ per quintal, modal price)</small></h3>
+          <div class="chart-box"><canvas id="chart" role="img" aria-label="Line chart of recent prices and a 7-day forecast for the ranked mandis"></canvas></div>
+          <p class="chart-note" id="chart-note"></p>
+        </div>
+        <p class="fine" id="fine"></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="harvest" id="harvest" aria-labelledby="harvest-title">
+    <div class="section-inner">
+      <div class="section-heading"><span class="eyebrow" data-i18n="advisorEyebrow">FIELD PLANNING TOOL</span><h2 id="harvest-title" data-i18n="advisorTitle">Harvest Advisor</h2><p data-i18n="advisorLead">Plan a harvest using your crop, sowing date and the maturity period recommended for your variety.</p></div>
+      <form id="harvest-form" class="harvest-form" novalidate>
+        <label class="field"><span data-i18n="cropLabel">Crop</span><select id="harvest-crop" required><option value="" data-i18n="chooseCrop">Choose a crop</option></select></label>
+        <label class="field"><span data-i18n="stateLabel">State</span><select id="harvest-state" required><option value="" data-i18n="chooseState">Choose a state</option></select></label>
+        <label class="field"><span data-i18n="sowingLabel">Sowing / transplanting date</span><input id="sowing-date" type="date" required></label>
+        <label class="field"><span data-i18n="durationLabel">Variety maturity period (days)</span><input id="maturity-days" type="number" min="1" max="500" placeholder="e.g. 100"><small data-i18n="durationHelp">Use the seed packet or local agriculture officer's recommendation. Leave blank if unknown.</small></label>
+        <button class="go" id="harvest-submit" type="submit" data-i18n="getAdvice">Get harvest guidance</button>
+      </form>
+      <div id="harvest-result" class="harvest-result" role="status" aria-live="polite" hidden></div>
+      <p class="harvest-disclaimer" data-i18n="advisorDisclaimer">Guidance is for planning only. Actual harvest readiness depends on variety, weather and field conditions. This tool does not use live weather or claim an exact harvest date.</p>
+    </div>
+  </section>
+
+  <section class="services" id="services">
+    <div class="section-inner"><div class="section-heading"><span class="eyebrow" data-i18n="servicesEyebrow">SUPPORT FOR EVERY SEASON</span><h2 data-i18n="servicesTitle">Agricultural Services</h2><p data-i18n="servicesLead">Practical tools to help farmers make informed decisions from sowing to selling.</p></div>
+      <div class="service-grid">
+        <article class="service-card"><span class="service-icon">₹</span><h3 data-i18n="service1Title">Mandi Price Insights</h3><p data-i18n="service1Text">Compare nearby market prices and estimated transport costs before choosing where to sell or buy.</p></article>
+        <article class="service-card"><span class="service-icon">🌱</span><h3 data-i18n="service2Title">Harvest Planning</h3><p data-i18n="service2Text">Estimate a crop's maturity date from your sowing date and variety guidance, then check field signs.</p></article>
+        <article class="service-card"><span class="service-icon">📍</span><h3 data-i18n="service3Title">Nearby Market Discovery</h3><p data-i18n="service3Text">Find mandi options using your town or device location, where location permission is available.</p></article>
+        <article class="service-card"><span class="service-icon">📈</span><h3 data-i18n="service4Title">Price Trend Forecasts</h3><p data-i18n="service4Text">Review short-term statistical price outlooks when enough market history is available.</p></article>
+      </div>
+    </div>
+  </section>
+
+  <section class="story" id="about">
+    <figure class="photo" style="margin:0">
+      <img src="agrisaarthi-hero.jpg" alt="Farmer using a phone at a fresh-produce agricultural marketplace" loading="lazy">
+    </figure>
+    <div>
+      <h2>Growing Together, Selling Smarter.</h2>
+      <p>AGRISAARTHI brings farmers and buyers onto one trusted platform. Our AI reads market prices, demand and crop trends so every farmer can see where their harvest will earn the most, and choose when and where to sell with confidence.</p>
+      <a class="more" href="#about">Learn how it works</a>
+    </div>
+  </section>
+</main>
+
+<footer>© 2026 AGRISAARTHI. Connecting farmers to better markets.</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="script.js"></script>
+</body>
+</html>
 
